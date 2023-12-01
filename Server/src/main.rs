@@ -32,14 +32,13 @@ pub struct Message {
     pub num_image_bytes: usize,
 }
 
-const NTHREADS: u32 = 2;
-static mut needToHandle: bool = false;
 
 //thread to execute the workload
 fn execute_load(
     workQ: &mut Arc<Mutex<queues::Queue<Message>>>,
     prtNum: &String,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut EncryptionSuccessCnt = 0; let mut EncryptionFailCnt=0;
     loop {
         // println!("Queue size {}",workQ.lock().unwrap().size());
         if workQ.lock().unwrap().size() > 0 {
@@ -50,12 +49,10 @@ fn execute_load(
             let image = ImageReader::new(std::io::Cursor::new(image_data))
                 .with_guessed_format()?
                 .decode();
-            //.map_err(|e| format!("Error decoding image: {}", e))?;
 
-            // Save the image as a .jpg file
-            println!("Will save image");
+                // Save the image as a .jpg file
             image?
-                .save("/home/abdullah/Desktop/Distributed Sys/UdpServ/src/received_image.jpg")
+                .save("./received_image.jpg")
                 .map_err(|e| format!("Error saving image: {}", e))?;
             println!("Received image saved as 'received_image.jpg'");
 
@@ -81,11 +78,16 @@ fn execute_load(
 
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                println!("Command output: {}", stdout);
+                EncryptionSuccessCnt+=1;
+                println!("encrypted image successfully");
+                println!("Num of successful Encryption: {}, Failures: {}",EncryptionSuccessCnt,EncryptionFailCnt);
+                
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("Command failed with error: {}", stderr);
+                EncryptionFailCnt+=1;
+                println!("failed to encrypt image.");
             }
+            //println!("finished handling request.");
         }
     }
 
@@ -104,7 +106,7 @@ fn handle_requests(
         let Ok((amt, src)) = socket.recv_from(&mut buffer) else {
             todo!()
         };
-        println!("packet recived from {:?}", src.to_string());
+        //println!("packet recived from {:?}", src.to_string());
 
         let msg: Message = serde_json::from_slice(&buffer[..amt]).unwrap();
 
@@ -124,45 +126,38 @@ fn workerThread(
     execQ: &mut Arc<Mutex<queues::Queue<Message>>>,
 ) {
     let server_addresses: [&str; 3] = [
-        "192.168.43.92:2000",
-        "192.168.43.92:2002",
-        "192.168.43.72:2003",
+        "192.168.1.3:2000",
+        "192.168.1.3:2001",
+        "192.168.1.3:2002",
     ];
     let client_addresses: [&str; 3] = [
-        "192.168.43.72:3001",
-        "192.168.43.92:3000",
+        "192.168.1.3:3000",
+        "192.168.1.3:3001",
         "192.168.91.128:3002",
     ];
 
     let my_local_ip_wt = local_ip().unwrap().to_string();
-
     let mut sys = System::new();
 
+    let mut cpuMsgCnt = 0;
     let mut cpuServ1: f32 = -1.0;
     let mut cpuServ2: f32 = -1.0;
-
     let mut idServ1 = 0;
     let mut idServ2 = 0;
-
     let mut ipServer1 = "".to_string();
     let mut ipServer2 = "".to_string();
 
     let mut minCpuIP = "".to_string(); // Will contain the ip of the min cpuload
-
-    let mut cpuMsgCnt = 0;
 
     let mut start = Instant::now();
 
     let mut CurrentElection = -1; // if -1 could start a new election if not dont start a new election
 
     let mut someoneFailed = false;
-
     let mut IamDown = false;
-
     let mut failedIp = "".to_string();
 
     let mut end = Instant::now();
-
     let mut secPassed = 0;
 
     let mut imgMsg: Message = Message {
@@ -190,6 +185,7 @@ fn workerThread(
         //     println!("iamdown variable = {}",IamDown);
         // }
 
+        // If server is down it will be up after duration
         if IamDown && end.duration_since(start) > Duration::from_secs(20) {
             println!("I am no longer Down!!");
             IamDown = false;
@@ -228,9 +224,8 @@ fn workerThread(
             }
             start = Instant::now();
             secPassed = 0;
-        } else if end.duration_since(start) > Duration::from_secs(10) && IamDown == false {
-            // println!("5 secs have passed");
-            // println!("*finalIP {} minCpuIP {}",*finalIP, minCpuIP);
+        } //else if it is not down it will periodically check if it has the lowest CPU Load
+        else if !someoneFailed && end.duration_since(start) > Duration::from_secs(10) && IamDown == false {
             if *finalIP == minCpuIP && IamDown == false {
                 println!("I will Fail!!!");
                 IamDown = true;
@@ -274,30 +269,33 @@ fn workerThread(
 
         let myCpuLoad = sys.load_average().unwrap().one;
 
+        // Handle The messages in the queue
         if workQ.lock().unwrap().size() > 0 {
             let curMsg = workQ.lock().unwrap().peek().unwrap();
             workQ.lock().unwrap().remove();
 
+            // Check if the sender ip is a server or a client
             if (server_addresses.contains(&curMsg.sender_ip.as_str())) {
-                //println!("server");
-                // println!("failedIp {} *finalIP {}", failedIp, *finalIP);
+                // This makes sure the server ignores and loses Any messages in queue after it fails
+                // This applies to existing messages in queue when failing and messages recieved after failing.
                 if failedIp == *finalIP {
                     println!("I failed so I will ignore");
                     continue;
                 }
 
+                // If recieved a message notifing that a server has failed.
                 if curMsg.fail_msg == true {
                     someoneFailed = true;
                     failedIp = curMsg.sender_ip.clone();
                 }
 
+                // If recieved a message notifing that the server that failed is up.
                 if curMsg.recoverey == true {
                     someoneFailed = false;
                     failedIp = "".to_string();
                 }
 
                 if curMsg.cpu_message == true && someoneFailed == false {
-                    // println!("this is a cpu message");
                     cpuMsgCnt += 1;
                     if cpuMsgCnt == 1 {
                         cpuServ1 = curMsg.cpu_load;
@@ -309,15 +307,7 @@ fn workerThread(
                         ipServer2 = curMsg.sender_ip;
                         cpuMsgCnt = 0;
 
-                        // println!(
-                        //     "My cpuload is {:}, cpu from serv1 {} and cpu from serv2 {}",
-                        //     myCpuLoad, cpuServ1, cpuServ2
-                        // );
-                        // println!("finalIP {}, ipServer1{} ,ipServer2{}",finalIP,&ipServer1,&ipServer2);
-
-                        // minCpuIP = server_addresses[0].to_string(); // to be changed
-
-                        // Finding the Min CPU IP
+                        // Finding the Min CPU IP - 1st by min CPU then by min IP+Port
 
                         if cpuServ1 == cpuServ2 && cpuServ1 == myCpuLoad {
                             if *finalIP < ipServer1 && *finalIP < ipServer2 {
@@ -360,8 +350,28 @@ fn workerThread(
                             }
                         }
 
-                        println!("minCpuIP = {}", minCpuIP);
+                        //println!("minCpuIP = {}", minCpuIP);
 
+                        // Finding if I will execute this image or no.
+
+                        if minCpuIP == *finalIP
+                        {
+                            println!("I will execute this image <=========");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                            execQ.lock().unwrap().add(imgMsg.clone());
+                            continue;
+                        }else
+                        {
+                            println!("I will not execute this image <=========");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                            continue;
+                        }
+                        
+                    /*
                         if cpuServ1 < myCpuLoad {
                             println!("I will not execute this image <=========");
                             cpuServ1 = -1.0;
@@ -435,8 +445,11 @@ fn workerThread(
                             execQ.lock().unwrap().add(imgMsg.clone());
                             continue;
                         }
+                    */
+
                     }
-                } else if curMsg.cpu_message == true && someoneFailed == true {
+                } // If a server is down we will only consider 1 other server, in our election. 
+                else if curMsg.cpu_message == true && someoneFailed == true {
                     println!("Some one failed.");
 
                     cpuServ1 = curMsg.cpu_load;
@@ -475,13 +488,14 @@ fn workerThread(
                     }
                 }
             } else if (client_addresses.contains(&curMsg.sender_ip.as_str())) {
-                //println!("client");
 
+                // if I am down I will ignore client messages. 
                 if failedIp == *finalIP {
                     println!("I failed so I will ignore");
                     continue;
                 }
 
+                // This messages is so that the if there is an election happening we dont start another unitl the 1st finished.
                 if curMsg.election == true && CurrentElection != -1 {
                     workQ.lock().unwrap().add(curMsg.clone());
 
@@ -492,13 +506,11 @@ fn workerThread(
                     CurrentElection = 1;
                     imgMsg = curMsg.clone();
 
-                    // println!("Will start an election");
 
                     for addr in server_addresses.iter() {
                         let addr_String = addr.to_string();
 
                         if addr_String != format!("{}:{}", my_local_ip_wt, prtNum) {
-                            //println!("Sending to ip -{}-",addr_String);
                             let ElectMessage = Message {
                                 id: 1,
                                 request: false,
@@ -531,7 +543,6 @@ fn workerThread(
 }
 
 fn main() -> std::io::Result<()> {
-    //let server_addresses: [&str; 3] = ["10.0.2.15:2000","10.0.2.15:2001","10.0.2.15:2002"];
 
     let args: Vec<String> = env::args().collect();
     let portNum = &args[1];
@@ -546,7 +557,7 @@ fn main() -> std::io::Result<()> {
     let fIP = my_local_ip.clone() + &":" + portNum;
     let socket = UdpSocket::bind(my_local_ip + &":" + portNum)?; // for UDP4/6
 
-    //create two threads one for receving and one for sending
+    //create 3 threads one for receving and one for sending and one for handling the encryption.
 
     let socket = socket.try_clone().expect("Failed to clone socket");
     let socket_cloned = socket.try_clone().expect("Failed to clone socket");
