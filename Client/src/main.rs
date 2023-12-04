@@ -31,7 +31,12 @@ pub struct Message {
 
 fn main() -> std::io::Result<()> {
     //let server_addresses: [&str; 3] = ["10.0.2.15:2000","10.0.2.15:2001","10.0.2.15:2002"];
-    let server_addresses: [&str; 3] = ["192.168.1.3:2000", "192.168.1.3:2001", "192.168.1.3:2002"];
+    let server_addresses: [&str; 3] = [
+        "10.0.2.7:2000",
+        "10.0.2.7:2001",
+        "10.0.2.7:2002",
+    ];
+    
     let args: Vec<String> = env::args().collect();
     let portNum = &args[1];
     let my_local_ip = local_ip().unwrap().to_string();
