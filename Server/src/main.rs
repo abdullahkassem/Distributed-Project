@@ -1,19 +1,20 @@
 #![allow(warnings)]
 
-use image::io::Reader as ImageReader;
 use local_ip_address::local_ip;
 use queues::*;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::process::Command;
 use std::str;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use systemstat::{saturating_sub_bytes, Platform, System};
+use image::io::Reader as ImageReader;
+use std::process::Command;
+use std::fs;
+
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Message {
@@ -30,84 +31,70 @@ pub struct Message {
     pub recoverey: bool,   // Means that server has recovered.
     pub image_buffer: Vec<u8>,
     pub num_image_bytes: usize,
+    pub online: bool,  // if client online -- gets added/removed from directory of service
+    pub dor_request: bool,  // want to see directory of service
+    pub dor:bool, 
+    pub directory: Vec<String>
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CpuLoadMsg{
-    pub value: f32,
-    pub ownerIp: String,
-}
-
-fn print_type_of<T>(_: &T) {
-    println!("{}", std::any::type_name::<T>())
-}
+const NTHREADS: u32 = 2;
+static mut needToHandle: bool = false;
 
 //thread to execute the workload
-fn execute_load(
-    workQ: &mut Arc<Mutex<queues::Queue<Message>>>,
-    prtNum: &String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut EncryptionSuccessCnt = 0; let mut EncryptionFailCnt=0;
-    loop {
-        // println!("Queue size {}",workQ.lock().unwrap().size());
-        if workQ.lock().unwrap().size() > 0 {
-            let curMsg = workQ.lock().unwrap().peek().unwrap();
-            workQ.lock().unwrap().remove();
-            let num_bytes = curMsg.num_image_bytes;
-            let image_data = &curMsg.image_buffer[..num_bytes];
-            let image = ImageReader::new(std::io::Cursor::new(image_data))
-                .with_guessed_format()?
-                .decode();
+fn execute_load  (workQ: &mut Arc<Mutex<queues::Queue<Message>>>,prtNum: &String) -> Result<(), Box<dyn std::error::Error>>
+{
 
-                // Save the image as a .jpg file
-            image?
-                .save("./received_image.jpg")
-                .map_err(|e| format!("Error saving image: {}", e))?;
-            println!("Received image saved as 'received_image.jpg'");
+    loop{
 
-            let prtNum_cloned = prtNum.clone();
+    // println!("Queue size {}",workQ.lock().unwrap().size());
+    if workQ.lock().unwrap().size() > 0{
+       
+        let curMsg = workQ.lock().unwrap().peek().unwrap();
+        workQ.lock().unwrap().remove();
+    let num_bytes = curMsg.num_image_bytes;
+    let image_data = &curMsg.image_buffer[..num_bytes];
+    let image = ImageReader::new(std::io::Cursor::new(image_data))
+       .with_guessed_format()?
+        .decode();
+        //.map_err(|e| format!("Error decoding image: {}", e))?;
+       
+           
+    // Save the image as a .jpg file
+    println!("Will save image");
+    image?.save("received_image.jpg").map_err(|e| format!("Error saving image: {}", e))?;
+    println!("Received image saved as 'received_image.jpg'");
 
-            let command = "steghide";
-            let args = [
-                "embed",
-                "-cf",
-                "super.jpg",
-                "-ef",
-                "received_image.jpg",
-                "-sf",
-                "output.jpg",
-                "-p",
-                "123",
-                "-f",
-            ];
-            let output = Command::new(command)
-                .args(&args)
-                .output()
-                .expect("Failed to steghide");
+        let prtNum_cloned = prtNum.clone();
+       
 
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                EncryptionSuccessCnt+=1;
-                println!("encrypted image successfully");
-                println!("Num of successful Encryption: {}, Failures: {}",EncryptionSuccessCnt,EncryptionFailCnt);
-                
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                EncryptionFailCnt+=1;
-                println!("failed to encrypt image.");
-            }
-            //println!("finished handling request.");
-        }
-    }
+    let command = "steghide";
+    let args = ["embed", "-cf", "super.jpg", "-ef",
+    "received_image.jpg", "-sf","output.jpg","-p","123","-f"];
+    let output = Command::new(command).args(&args).output().expect("Failed to steghide");
+   
+   
+    if output.status.success()
+{
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   println!("Command output: {}", stdout);
 
-    Ok(())
+} else
+{
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   println!("Command failed with error: {}", stderr);
+}
+}
+}
+
+
+
+
+Ok(())
 }
 
 // thread that will always listen to requests and put them into queue:
-fn handle_requests(
-    socket: UdpSocket,
-    workQ: &mut Arc<Mutex<queues::Queue<Message>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_requests(socket: UdpSocket, workQ: &mut Arc<Mutex<queues::Queue<Message>>>) -> Result<(), Box<dyn std::error::Error>>
+{
     let buffer_size = 2 * 1024 * 1024; // 2 MB buffer
     let mut buffer = vec![0u8; buffer_size];
 
@@ -115,7 +102,7 @@ fn handle_requests(
         let Ok((amt, src)) = socket.recv_from(&mut buffer) else {
             todo!()
         };
-        //println!("packet recived from {:?}", src.to_string());
+        // println!("packet recived from {:?}", src.to_string());
 
         let msg: Message = serde_json::from_slice(&buffer[..amt]).unwrap();
 
@@ -132,70 +119,46 @@ fn workerThread(
     finalIP: &String,
     workQ: &mut Arc<Mutex<queues::Queue<Message>>>,
     prtNum: &String,
-    execQ: &mut Arc<Mutex<queues::Queue<Message>>>,
+    execQ: &mut Arc<Mutex<queues::Queue<Message>>>
 ) {
-    
-    
-    let server_addresses: [&str; 3] = [
-        "10.0.2.7:2000",
-        "10.0.2.7:2001",
-        "10.0.2.7:2002",
-    ];
-
-    let client_addresses: [&str; 3] = [
-        "10.0.2.7:3000",
-        "192.168.1.3:3001",
-        "192.168.91.128:3002",
-    ];
-
-    let mut ServServ_addresses:  Vec<String> = Vec::new();
-
-    //Calculate the Server to server addresses of other servers.
-    for i in 0..3
-    {
-        let mut sIP = server_addresses[i].to_string();    
-        let sP = sIP.split(":").last().unwrap();
-        let new_sP = sP.parse::<u32>().unwrap() + 100;
-        let SSAdd = format!("{}:{}", sIP.split(":").next().unwrap(), new_sP);
-        ServServ_addresses.push(SSAdd.clone());
-        
-        //println!("{}",ServServ_addresses[i]);
-    }
-
-    let allowFailures = false;
-
-    let mut MyPort = finalIP.split(":").last().unwrap();
-    let MyNewPort= MyPort.parse::<u32>().unwrap() + 100;
-    let ServerCommunicationIP= format!("{}:{}", finalIP.split(":").next().unwrap(), MyNewPort);
-    println!("ServerCommIP: {}.",ServerCommunicationIP);
-    
-    let S_to_S_Socket = UdpSocket::bind(ServerCommunicationIP).expect("Failed to bind socket");
+    let server_addresses: [&str; 3] = ["10.7.57.107:2004", "10.7.57.107:2005", "10.7.57.107:2006"];
+    //let client_addresses: [&str; 3] = ["192.168.43.227:3000", "192.168.43.92:3000", "192.168.43.132:3000"];
+    let mut client_addresses:Vec<String> = Vec::new(); // change1
 
     let my_local_ip_wt = local_ip().unwrap().to_string();
+
     let mut sys = System::new();
 
-    let mut cpuMsgCnt = 0;
     let mut cpuServ1: f32 = -1.0;
     let mut cpuServ2: f32 = -1.0;
+
     let mut idServ1 = 0;
     let mut idServ2 = 0;
+
     let mut ipServer1 = "".to_string();
     let mut ipServer2 = "".to_string();
 
     let mut minCpuIP = "".to_string(); // Will contain the ip of the min cpuload
+
+    let mut cpuMsgCnt = 0;
 
     let mut start = Instant::now();
 
     let mut CurrentElection = -1; // if -1 could start a new election if not dont start a new election
 
     let mut someoneFailed = false;
+
     let mut IamDown = false;
+
     let mut failedIp = "".to_string();
+    let mut onlineIP = "".to_string(); 
+    let mut offlineIP = "".to_string();
 
     let mut end = Instant::now();
+
     let mut secPassed = 0;
 
-    let mut imgMsg: Message = Message {
+    let mut imgMsg: Message= Message {
         id: 1,
         reciver_id: 2,
         request: false,
@@ -209,19 +172,25 @@ fn workerThread(
         num_image_bytes: 0,
         fail_msg: false,
         recoverey: false,
+        online: true,  
+        dor_request:false,
+        dor:false,
+        directory: client_addresses.clone()
+
     };
 
     loop {
         end = Instant::now();
+
 
         // if secPassed < end.duration_since(start).as_secs(){
         //     println!("current time since start {:?}",end.duration_since(start).as_secs());
         //     secPassed = end.duration_since(start).as_secs();
         //     println!("iamdown variable = {}",IamDown);
         // }
-
-        // If server is down it will be up after duration
-        if IamDown && end.duration_since(start) > Duration::from_secs(20) {
+       
+        if IamDown && end.duration_since(start) > Duration::from_secs(20)
+        {
             println!("I am no longer Down!!");
             IamDown = false;
             failedIp = "".to_string();
@@ -248,20 +217,28 @@ fn workerThread(
                         recoverey: true,
                         image_buffer: vec![0u8; 2],
                         num_image_bytes: 0,
+                        online: true,  
+                        dor_request: false,
+                        dor:false,
+                        directory: client_addresses.clone()
                     };
 
                     let serialized_object = serde_json::to_string(&recoverMsg).unwrap();
 
-                    socket
-                        .send_to(&serialized_object.as_bytes(), addr_String)
+                    socket.send_to(&serialized_object.as_bytes(), addr_String)
                         .expect("Error on send");
                 }
             }
             start = Instant::now();
             secPassed = 0;
-        } //else if it is not down it will periodically check if it has the lowest CPU Load
-        else if allowFailures && !someoneFailed && end.duration_since(start) > Duration::from_secs(10) && IamDown == false {
+        }
+        else if end.duration_since(start) > Duration::from_secs(10) && IamDown == false
+        {
+           
+            // println!("5 secs have passed");
+            // println!("*finalIP {} minCpuIP {}",*finalIP, minCpuIP);
             if *finalIP == minCpuIP && IamDown == false {
+
                 println!("I will Fail!!!");
                 IamDown = true;
                 failedIp = (*finalIP).clone();
@@ -288,6 +265,10 @@ fn workerThread(
                             recoverey: false,
                             image_buffer: vec![0u8; 2],
                             num_image_bytes: 0,
+                            online: true,  
+                            dor_request: false, 
+                            dor:false,
+                            directory: client_addresses.clone()
                         };
 
                         let serialized_object = serde_json::to_string(&failMsg).unwrap();
@@ -302,44 +283,223 @@ fn workerThread(
             secPassed = 0;
         }
 
-        
+        let myCpuLoad = sys.load_average().unwrap().one;
 
-        // Handle The messages in the queue
         if workQ.lock().unwrap().size() > 0 {
             let curMsg = workQ.lock().unwrap().peek().unwrap();
             workQ.lock().unwrap().remove();
 
-            // Check if the sender ip is a server or a client
             if (server_addresses.contains(&curMsg.sender_ip.as_str())) {
-                // This makes sure the server ignores and loses Any messages in queue after it fails
-                // This applies to existing messages in queue when failing and messages recieved after failing.
+                //println!("server");
+                // println!("failedIp {} *finalIP {}", failedIp, *finalIP);
                 if failedIp == *finalIP {
                     println!("I failed so I will ignore");
                     continue;
                 }
 
-                // If recieved a message notifing that a server has failed.
                 if curMsg.fail_msg == true {
                     someoneFailed = true;
                     failedIp = curMsg.sender_ip.clone();
                 }
 
-                // If recieved a message notifing that the server that failed is up.
-                if curMsg.recoverey == true {
+                if curMsg.recoverey == true
+                {
                     someoneFailed = false;
                     failedIp = "".to_string();
                 }
 
-                
-            } else if (client_addresses.contains(&curMsg.sender_ip.as_str())) {
+                if curMsg.cpu_message == true && someoneFailed == false {
+                    // println!("this is a cpu message");
+                    cpuMsgCnt += 1;
+                    if cpuMsgCnt == 1 {
+                        cpuServ1 = curMsg.cpu_load;
+                        idServ1 = curMsg.id;
+                        ipServer1 = curMsg.sender_ip;
+                    } else if cpuMsgCnt == 2 {
+                        cpuServ2 = curMsg.cpu_load;
+                        idServ2 = curMsg.id;
+                        ipServer2 = curMsg.sender_ip;
+                        cpuMsgCnt = 0;
 
-                // if I am down I will ignore client messages. 
+                        // println!(
+                        //     "My cpuload is {:}, cpu from serv1 {} and cpu from serv2 {}",
+                        //     myCpuLoad, cpuServ1, cpuServ2
+                        // );
+                        // println!("finalIP {}, ipServer1{} ,ipServer2{}",finalIP,&ipServer1,&ipServer2);
+
+                        // minCpuIP = server_addresses[0].to_string(); // to be changed
+                   
+                        // Finding the Min CPU IP
+                   
+                        if cpuServ1 == cpuServ2 && cpuServ1 == myCpuLoad
+                        {
+                            if *finalIP < ipServer1 && *finalIP < ipServer2 {
+                                minCpuIP = (*finalIP).clone();
+                            } else if ipServer1 < *finalIP && ipServer1 < ipServer2
+                            {
+                                minCpuIP = ipServer1.clone();
+                            } else if ipServer2 < *finalIP && ipServer2 < ipServer1
+                            {
+                                minCpuIP = ipServer2.clone();
+                            }
+                        }else if myCpuLoad > cpuServ1 && cpuServ1 == cpuServ2
+                        {
+                            if ipServer1 < ipServer2
+                            {minCpuIP = ipServer1.clone();}
+                            else
+                            {minCpuIP = ipServer2.clone();}
+                        }else if cpuServ1 > myCpuLoad && myCpuLoad == cpuServ2
+                        {
+                            if *finalIP < ipServer2
+                            {minCpuIP = (*finalIP).clone();}
+                            else
+                            {minCpuIP = ipServer2.clone();}
+                        }else if cpuServ2 > myCpuLoad && myCpuLoad == cpuServ1
+                        {
+                            if *finalIP < ipServer1
+                            {minCpuIP = (*finalIP).clone();}
+                            else
+                            {minCpuIP = ipServer1.clone();}
+                        }else
+                        {
+                            // let min = min(min(myCpuLoad, cpuServ1), cpuServ2);
+                            let mut min = myCpuLoad.min(cpuServ1);
+                            min = min.min(cpuServ2);
+                            // println!("min is {:.3}",min);
+
+                            if min == myCpuLoad {
+                                minCpuIP = (*finalIP).clone();
+                            } else if min == cpuServ1 {
+                                minCpuIP = ipServer1.clone();
+                            } else if min == cpuServ2 {
+                                minCpuIP = ipServer2.clone();
+                            }
+                           
+                        }
+
+                        println!("minCpuIP = {}",minCpuIP);
+
+
+                        if cpuServ1 < myCpuLoad {
+                            println!("I will not execute this image <=========");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                            continue;
+                        } else if cpuServ2 < myCpuLoad {
+                            println!("I will not execute this image <=========");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                            continue;
+                        } else {
+                            if cpuServ1 == myCpuLoad && myCpuLoad == cpuServ2 {
+                                if finalIP < &ipServer1 && finalIP < &ipServer2 {
+                                    println!("I will execute this image <=========");
+                                    cpuServ1 = -1.0;
+                                    cpuServ2 = -1.0;
+                                    CurrentElection = -1;
+                                    execQ.lock().unwrap().add(imgMsg.clone());
+                                    continue;
+                                } else {
+                                    println!("I will not execute this image <=========");
+                                    cpuServ1 = -1.0;
+                                    cpuServ2 = -1.0;
+                                    CurrentElection = -1;
+                                    continue;
+                                }
+                            }
+
+                            if cpuServ1 == myCpuLoad {
+                                //compare ip and port if mine is less i will execute
+                                if finalIP < &ipServer1 {
+                                    println!("I will execute this image <=========");
+                                    cpuServ1 = -1.0;
+                                    cpuServ2 = -1.0;
+                                    CurrentElection = -1;
+                                    execQ.lock().unwrap().add(imgMsg.clone());
+                                    continue;
+                                } else {
+                                    println!("I will not execute this image <=========");
+                                    cpuServ1 = -1.0;
+                                    cpuServ2 = -1.0;
+                                    CurrentElection = -1;
+                                    continue;
+                                }
+                            }
+
+                            if cpuServ2 == myCpuLoad {
+                                //compare ip and port if mine is less i will execute
+                                if finalIP < &ipServer2 {
+                                    println!("I will execute this image <=========");
+                                    cpuServ1 = -1.0;
+                                    cpuServ2 = -1.0;
+                                    CurrentElection = -1;
+                                    execQ.lock().unwrap().add(imgMsg.clone());
+                                    continue;
+                                } else {
+                                    println!("I will not execute this image <=========");
+                                    cpuServ1 = -1.0;
+                                    cpuServ2 = -1.0;
+                                    CurrentElection = -1;
+                                    continue;
+                                }
+                            }
+
+                            println!("I will execute this image <=========");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                            execQ.lock().unwrap().add(imgMsg.clone());
+                            continue;
+                        }
+                    }
+                } else if curMsg.cpu_message == true && someoneFailed == true {
+                    println!("Some one failed.");
+
+                    cpuServ1 = curMsg.cpu_load;
+                    idServ1 = curMsg.id;
+                    ipServer1 = curMsg.sender_ip;
+
+                    if myCpuLoad > cpuServ1 {
+                        println!("I will not execute this image <-----------");
+                        cpuServ1 = -1.0;
+                        cpuServ2 = -1.0;
+                        CurrentElection = -1;
+                        continue;
+                    } else if myCpuLoad == cpuServ1 {
+                        if finalIP < &ipServer1 {
+                            println!("I will execute this image <-------------");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                            execQ.lock().unwrap().add(imgMsg.clone());
+                            continue;
+                        } else {
+                            println!("I will not execute this image <-------------");
+                            cpuServ1 = -1.0;
+                            cpuServ2 = -1.0;
+                            CurrentElection = -1;
+                           
+                            continue;
+                        }
+                    } else {
+                        println!("I will execute this image <-------------");
+                        cpuServ1 = -1.0;
+                        cpuServ2 = -1.0;
+                        CurrentElection = -1;
+                        execQ.lock().unwrap().add(imgMsg.clone());
+                        continue;
+                    }
+                }
+           } else if (client_addresses.contains(&curMsg.sender_ip.to_string())) {
+           
+            
                 if failedIp == *finalIP {
                     println!("I failed so I will ignore");
                     continue;
                 }
 
-                // This messages is so that the if there is an election happening we dont start another unitl the 1st finished.
                 if curMsg.election == true && CurrentElection != -1 {
                     workQ.lock().unwrap().add(curMsg.clone());
 
@@ -350,122 +510,95 @@ fn workerThread(
                     CurrentElection = 1;
                     imgMsg = curMsg.clone();
 
-                    let myCpuLoad = sys.load_average().unwrap().one;
-                    // Send My Cpu load to the other servers
-                    for addr in ServServ_addresses.iter() {
+                    // println!("Will start an election");
+
+                    for addr in server_addresses.iter() {
                         let addr_String = addr.to_string();
 
                         if addr_String != format!("{}:{}", my_local_ip_wt, prtNum) {
-                            let announcmentMsg = CpuLoadMsg {
-                                value: myCpuLoad,
-                                ownerIp: finalIP.to_string(),
+                            //println!("Sending to ip -{}-",addr_String);
+                            let ElectMessage = Message {
+                                id: 1,
+                                request: false,
+                                reciver_id: 1, // To be changed
+                                text: "hello".to_string(),
+                                election: false,
+                                cpu_load: myCpuLoad,
+                                cpu_message: true,
+                                sender_ip: format!("{}:{}", my_local_ip_wt, prtNum),
+                                reciver_ip: addr_String.clone(),
+                                fail_msg: false,
+                                recoverey: false,
+                                image_buffer: vec![0u8; 2],
+                                num_image_bytes: 0,
+                                online: true,  
+                                dor_request: false, 
+                                dor:false,
+                                directory: client_addresses.clone()
                             };
-                            let serialized_object = serde_json::to_string(&announcmentMsg).unwrap();
-                            S_to_S_Socket.send_to(&serialized_object.as_bytes() ,addr_String);
+
+                            let serialized_object = serde_json::to_string(&ElectMessage).unwrap();
+
+                            socket
+                                .send_to(&serialized_object.as_bytes(), addr_String)
+                                .expect("Error on send");
                         }
-                    }
-
-                    //Wait for the Cpu Load of the other servers.
-                    let mut waitFor = 3;
-                    if someoneFailed == true
-                    {waitFor -=1;}
-
-                    for i in 0..waitFor
-                    {
-                        let Cpu_buffer_size = 2 * 1024; 
-                        let mut Cpu_buffer = vec![0u8; Cpu_buffer_size];
-
-                        let Ok((amt, src)) = S_to_S_Socket.recv_from(&mut Cpu_buffer) else {
-                            todo!()
-                        };
-                        //println!("cpu Anouncment recived from {:?}", src.to_string());
-
-                        let cpuLoadRecieved: CpuLoadMsg = serde_json::from_slice(&Cpu_buffer[..amt]).unwrap();
-                        //println!("recieved load from {} load is {}",cpuLoadRecieved.ownerIp,cpuLoadRecieved.value);
-                        if i == 1 {
-                            cpuServ1 = cpuLoadRecieved.value.clone();
-                            ipServer1 = cpuLoadRecieved.ownerIp.clone();
-                        }
-                        if i == 2 {
-                            cpuServ2 = cpuLoadRecieved.value;
-                            ipServer2 = cpuLoadRecieved.ownerIp;
-                            // Finding the Min CPU IP - 1st by min CPU then by min IP+Port
-
-                        }
-
-                    }
-                    if cpuServ1 == cpuServ2 && cpuServ1 == myCpuLoad {
-                        if *finalIP < ipServer1 && *finalIP < ipServer2 {
-                            minCpuIP = (*finalIP).clone();
-                        } else if ipServer1 < *finalIP && ipServer1 < ipServer2 {
-                            minCpuIP = ipServer1.clone();
-                        } else if ipServer2 < *finalIP && ipServer2 < ipServer1 {
-                            minCpuIP = ipServer2.clone();
-                        }
-                    } else if myCpuLoad > cpuServ1 && cpuServ1 == cpuServ2 {
-                        if ipServer1 < ipServer2 {
-                            minCpuIP = ipServer1.clone();
-                        } else {
-                            minCpuIP = ipServer2.clone();
-                        }
-                    } else if cpuServ1 > myCpuLoad && myCpuLoad == cpuServ2 {
-                        if *finalIP < ipServer2 {
-                            minCpuIP = (*finalIP).clone();
-                        } else {
-                            minCpuIP = ipServer2.clone();
-                        }
-                    } else if cpuServ2 > myCpuLoad && myCpuLoad == cpuServ1 {
-                        if *finalIP < ipServer1 {
-                            minCpuIP = (*finalIP).clone();
-                        } else {
-                            minCpuIP = ipServer1.clone();
-                        }
-                    } else {
-                        // let min = min(min(myCpuLoad, cpuServ1), cpuServ2);
-                        let mut min = myCpuLoad.min(cpuServ1);
-                        min = min.min(cpuServ2);
-                        // println!("min is {:.3}",min);
-
-                        if min == myCpuLoad {
-                            minCpuIP = (*finalIP).clone();
-                        } else if min == cpuServ1 {
-                            minCpuIP = ipServer1.clone();
-                        } else if min == cpuServ2 {
-                            minCpuIP = ipServer2.clone();
-                        }
-                    }
-
-                    println!("minCpuIP = {}", minCpuIP);
-
-                    // Finding if I will execute this image or no.
-
-                    if minCpuIP == *finalIP
-                    {
-                        println!("I will execute this image <=========");
-                        cpuServ1 = -1.0;
-                        cpuServ2 = -1.0;
-                        CurrentElection = -1;
-                        execQ.lock().unwrap().add(imgMsg.clone());
-                        continue;
-                    }else
-                    {
-                        println!("I will not execute this image <=========");
-                        cpuServ1 = -1.0;
-                        cpuServ2 = -1.0;
-                        CurrentElection = -1;
-                        continue;
                     }
                 }
             } else {
-                println!("Message from unknown sender recived.")
+               // println!("Message from unknown sender recived.")
+          
+               if curMsg.online == true {            
+                   onlineIP = curMsg.sender_ip.clone(); 
+                   println!("new client");                          		              
+                client_addresses.push(onlineIP); }
+                //println!("client");
+                if curMsg.online ==  false {
+                                // deltes the element equal to senderip
+                    offlineIP = curMsg.sender_ip.clone();
+		            client_addresses.retain(|x| x != &offlineIP);
+ 
+                }
+                if curMsg.dor_request == true {
+                    println!("sending-  Directory of Service:   {:?}", client_addresses); // we dont want to print hena we want to print this at the client side
+                    
+                    let addr_String = curMsg.sender_ip.to_string();
+                    let DoRMessge = Message {
+                        id: 1,
+                        request: false,
+                        reciver_id: 1, // To be changed
+                        text: "hello".to_string(),
+                        election: false,
+                        cpu_load: myCpuLoad,
+                        cpu_message: true,
+                        sender_ip: format!("{}:{}", my_local_ip_wt, prtNum),
+                        reciver_ip: addr_String.clone(),
+                        fail_msg: false,
+                        recoverey: false,
+                        image_buffer: vec![0u8; 2],
+                        num_image_bytes: 0,
+                        online: true,  
+                        dor_request: false, 
+                        dor:false,
+                        directory: client_addresses.clone()
+                    };
+
+                    let serialized_object = serde_json::to_string(&DoRMessge).unwrap();
+
+                            socket
+                                .send_to(&serialized_object.as_bytes(), addr_String)
+                                .expect("Error on send");
+                        }
+
+                }
+
+
             }
         }
     }
-}
-
-
 
 fn main() -> std::io::Result<()> {
+    //let server_addresses: [&str; 3] = ["10.0.2.15:2000","10.0.2.15:2001","10.0.2.15:2002"];
 
     let args: Vec<String> = env::args().collect();
     let portNum = &args[1];
@@ -480,7 +613,7 @@ fn main() -> std::io::Result<()> {
     let fIP = my_local_ip.clone() + &":" + portNum;
     let socket = UdpSocket::bind(my_local_ip + &":" + portNum)?; // for UDP4/6
 
-    //create 3 threads one for receving and one for sending and one for handling the encryption.
+    //create two threads one for receving and one for sending
 
     let socket = socket.try_clone().expect("Failed to clone socket");
     let socket_cloned = socket.try_clone().expect("Failed to clone socket");
@@ -490,7 +623,7 @@ fn main() -> std::io::Result<()> {
 
     let mut workQueue_cloned = workQueue.clone();
     let mut workQueue_cloned2 = workQueue.clone();
-
+   
     let mut executeQueueCopy = executeQueue.clone();
 
     thread::spawn(move || {
@@ -498,17 +631,11 @@ fn main() -> std::io::Result<()> {
     });
 
     thread::spawn(move || {
-        execute_load(&mut executeQueue.clone(), &portNum_cloned_2);
+        execute_load(&mut executeQueue.clone(),&portNum_cloned_2);
     });
 
     thread::spawn(move || {
-        workerThread(
-            socket_cloned,
-            &fIP,
-            &mut workQueue_cloned,
-            &portNum_cloned,
-            &mut executeQueueCopy,
-        );
+        workerThread(socket_cloned, &fIP, &mut workQueue_cloned, &portNum_cloned, &mut executeQueueCopy);
     });
 
     loop {}
