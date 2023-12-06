@@ -22,7 +22,7 @@ pub struct Message {
     pub text: String,
     pub election: bool,    //to start an election
     pub cpu_load: f32,     //contains the cpu load
-    pub cpu_message: bool, //this means that this message is for sharing the cpu load with other servers
+    pub msgID: String,
     pub image_buffer: Vec<u8>,
     pub num_image_bytes: usize,
     pub fail_msg: bool,  // if recived from server that means that it has failed.
@@ -56,10 +56,14 @@ fn main() -> std::io::Result<()> {
     // Load the image from a file
     let image_data = fs::read("image.jpg")?; // Replace with the path
 
+    
+
     //if image_data.len() > buffer_size {
     //    return Err("Image size exceeds the buffer size.".into());
     //}
-    for i in 0..2 {
+    let mut msgCount = 0;
+    for i in 0..10 {
+        msgCount+=1;
         for j in 0..3 {
             let parts: Vec<&str> = server_addresses[j].split(':').collect();
             if parts.len() != 2 {
@@ -76,7 +80,7 @@ fn main() -> std::io::Result<()> {
                 text: "hello".to_string(),
                 election: true,
                 cpu_load: 0.0,
-                cpu_message: false,
+                msgID: format!("{}:{}-{}", my_local_ip.clone(), portNum.clone(),msgCount),
                 sender_ip: format!("{}:{}", my_local_ip.clone(), portNum.clone()),
                 reciver_ip: format!("{}:{}", hostname.clone(), port.clone()),
                 image_buffer: image_data.clone(),
