@@ -335,7 +335,7 @@ fn workerThread(
                 // This makes sure the server ignores and loses Any messages in queue after it fails
                 // This applies to existing messages in queue when failing and messages recieved after failing.
                 if failedIp == *finalIP {
-                    println!("I failed so I will ignore");
+                    //println!("I failed so I will ignore");
                     continue;
                 }
 
@@ -349,6 +349,8 @@ fn workerThread(
                 if curMsg.recoverey == true {
                     someoneFailed = false;
                     failedIp = "".to_string();
+                    start = Instant::now();
+                    secPassed = 0;
                 }
             } else if (client_addresses.contains(&curMsg.sender_ip.as_str())) {
                 // if I am down I will ignore client messages.
@@ -372,18 +374,27 @@ fn workerThread(
 
                     let myCpuLoad = sys.load_average().unwrap().one;
                     let curMsgId = curMsg.msgID.clone();
+
+                    let mut newFailedIP = ".".to_string();
+                    if failedIp != ""
+                    {
+                        let failedPort = failedIp.split(":").last().unwrap();
+                        let NewfailedPort = failedPort.parse::<u32>().unwrap() + 100;
+                        newFailedIP = format!("{}:{}", failedIp.split(":").next().unwrap(), NewfailedPort);
+                    }
                     
                     // Send My Cpu load to the other servers
                     for addr in ServServ_addresses.iter() {
                         let addr_String = addr.to_string();
 
-                        if addr_String != ServerCommunicationIP {
+                        if addr_String != ServerCommunicationIP && addr_String != newFailedIP {
+
                             let announcmentMsg = CpuLoadMsg {
                                 value: myCpuLoad,
                                 ownerIp: finalIP.to_string(),
                                 ElectionNum: curMsg.msgID.clone(),
                             };
-                            //println!("my ip is {} sending cpuload to {} num: {}",format!("{}:{}", my_local_ip_wt, prtNum),addr_String,curMsgId.clone());
+
                             let serialized_object = serde_json::to_string(&announcmentMsg).unwrap();
                             let result =
                                 S_to_S_Socket.send_to(&serialized_object.as_bytes(), addr_String);
@@ -396,7 +407,6 @@ fn workerThread(
                         waitFor -= 1;
                     }
 
-                    //println!("Will wait for {} cpus", waitFor);
 
                     let mut cpuElNum1 = "-1".to_string();
                     let mut cpuElNum2 = "-1".to_string();
@@ -419,13 +429,9 @@ fn workerThread(
 
                             Err(err) => {
                                 // Handle the error
-                                ;//println!("Error receiving data: {}", err);
+                                ;
                             }
                         }
-
-
-                        // let (number_of_bytes, src_addr) = S_to_S_Socket
-                        //     .recv_from(&mut Cpu_buffer).expect("Didnt recieve data");
 
 
                         while cpuMsgsQ.size() != 0 
@@ -449,17 +455,14 @@ fn workerThread(
                                 }
 
                                 if (cpuServ1 != -1.0 && cpuServ2 != -1.0) || (someoneFailed && (cpuServ1 != -1.0 || cpuServ2 != -1.0) ) {
-                                    //println!("I have finished recieving");
                                     finished_waiting = true;
                                     break;
                                 }
                             } else {
                                 cpuMsgsQ.add(currentCpuMsg.clone());
-                                //println!("For msgIP {} Election Num mismatch between ours {} and the msg's {}",currentCpuMsg.ownerIp.clone(),curMsgId.clone(),currentCpuMsg.ElectionNum.clone());
                             }
                         }
                         if finished_waiting {
-                            //println!("finished_waiting is true");
                             finished_waiting = false;
                             break;
                         }
@@ -479,20 +482,20 @@ fn workerThread(
                     }
 
 
-                    println!(
-                        "I have \n0. Ip: {} with load {} for no {}",
-                        *finalIP,
-                        myCpuLoad,
-                        curMsgId.clone()
-                    );
-                    println!(
-                        "1. Ip: {} with load {} for no {}",
-                        ipServer1, cpuServ1, cpuElNum1
-                    );
-                    println!(
-                        "2. Ip: {} with load {} for no {}",
-                        ipServer2, cpuServ2, cpuElNum2
-                    );
+                    // println!(
+                    //     "I have \n0. Ip: {} with load {} for no {}",
+                    //     *finalIP,
+                    //     myCpuLoad,
+                    //     curMsgId.clone()
+                    // );
+                    // println!(
+                    //     "1. Ip: {} with load {} for no {}",
+                    //     ipServer1, cpuServ1, cpuElNum1
+                    // );
+                    // println!(
+                    //     "2. Ip: {} with load {} for no {}",
+                    //     ipServer2, cpuServ2, cpuElNum2
+                    // );
 
                     
 
@@ -523,10 +526,8 @@ fn workerThread(
                             minCpuIP = ipServer1.clone();
                         }
                     } else {
-                        // let min = min(min(myCpuLoad, cpuServ1), cpuServ2);
                         let mut min = myCpuLoad.min(cpuServ1);
                         min = min.min(cpuServ2);
-                        // println!("min is {:.3}",min);
 
                         if min == myCpuLoad {
                             minCpuIP = (*finalIP).clone();
