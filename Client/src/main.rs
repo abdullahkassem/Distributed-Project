@@ -14,6 +14,7 @@ use std::fs;
 use inquire::list_option::ListOption;
 use inquire::Select;
 use inquire::InquireError;
+use viuer::{print_from_file, Config};
 
 #[derive(Serialize, Deserialize, Debug,Clone)]
 pub struct Message {
@@ -33,14 +34,34 @@ pub struct Message {
     pub online: bool,  // if client online -- gets added/removed from directory of service 
     pub dor_request:bool, 
     pub dor: bool,  // want to see directory of service 
-    pub directory: Vec<String>
+    pub directory: Vec<String>,
+    pub viewimg_request: bool,
+    // pub sending_allimg: bool,  // new 
+    // pub all_img_buffer: Vec<u8>, //idk
+    // pub no_of_img: usize //help
 }
 
 
 
 fn main() -> std::io::Result<()> {
+
+    
+// working code that prints an image in terminal  
+// let conf = Config {
+//     // set offset
+//     x: 20,
+//     y: 4,
+//     // set dimensions
+//     width: Some(80),
+//     height: Some(25),
+//     ..Default::default()
+// };
+
+ 
+// print_from_file("image.jpg", &conf).expect("Image printing failed.");
+/// rest of code 3ady 
     //let server_addresses: [&str; 3] = ["10.0.2.15:2000","10.0.2.15:2001","10.0.2.15:2002"];
-    let server_addresses: [&str; 3] = ["10.40.38.96:2000", "10.7.57.107:2005", "10.7.57.107:2006"];
+    let server_addresses: [&str; 3] = ["10.7.57.107:2000", "10.7.57.107:2005", "10.7.57.107:2006"];
     let args: Vec<String> = env::args().collect();
     let portNum = &args[1];
     let my_local_ip = local_ip().unwrap().to_string();
@@ -104,7 +125,8 @@ fn main() -> std::io::Result<()> {
                 online: false,  
                 dor_request: false,
                 dor:false ,
-                directory: dirofser.clone()
+                directory: dirofser.clone(),
+                viewimg_request:false
             };
        
             let serialized_object = serde_json::to_string(&msg).unwrap();
@@ -144,13 +166,27 @@ fn main() -> std::io::Result<()> {
                 online: true,  
                 dor_request: false,
                 dor:false ,
-                directory: dirofser.clone()
+                directory: dirofser.clone(),
+                viewimg_request:false
             };
        
             let serialized_object = serde_json::to_string(&msg).unwrap();
             socket.send_to(&serialized_object.as_bytes(), server_addresses[j])
                     .expect("Error on send");
             //println!("Image sent to server at {}", server_addresses[j]);
+            
+             let Ok((amt, src)) = socket.recv_from(&mut buf) else {
+                    todo!()
+                };
+                // println!("packet recived from {:?}", src.to_string());
+        
+                let msg: Message = serde_json::from_slice(&buf[..amt]).unwrap();
+                
+                if msg.viewimg_request == true{
+                println!("Recieved image request! i will now send all my images ");
+                
+                }
+
         }
     }
 
@@ -167,7 +203,7 @@ fn main() -> std::io::Result<()> {
                 let port = parts[1];
 
 
-                let msg = Message {  // online message 
+                let msg = Message {  // request dor message 
                     id: 1,
                     reciver_id: 2,
                     request: false,
@@ -184,7 +220,8 @@ fn main() -> std::io::Result<()> {
                     online: true,  
                     dor_request: true,
                     dor:false ,
-                    directory: dirofser.clone()
+                    directory: dirofser.clone(), 
+                    viewimg_request:false
                 };
         
                 let serialized_object = serde_json::to_string(&msg).unwrap();
@@ -198,10 +235,48 @@ fn main() -> std::io::Result<()> {
                 // println!("packet recived from {:?}", src.to_string());
         
                 let msg: Message = serde_json::from_slice(&buf[..amt]).unwrap();
-        
-                //workQ.lock().unwrap().add(msg.clone());
                 dirofser = msg.directory.clone();
                 println!("Directory of service {:?}", dirofser);
+//let options2: Vec<&str> = vec!["online", "offline",  "Directory of Service", "send img"];
+		let v2: Vec<&str> = dirofser.iter().map(|s| s as &str).collect();
+ 		let ans2: Result<&str, InquireError> = Select::new("Whos pics do u want to see", v2).prompt();
+		    let mut err: &str = "error";
+		    let mut choice2 = match ans2 {
+		       Ok(choice2) => choice2,
+		       Err(_) => err,
+		   };
+                
+                // choice 2 -- string that is the ip address of client picked to veiw their pics
+                // send a request message to view images from other person 
+                let msg = Message {  //  request to view message  
+                    id: 1,
+                    reciver_id: 2,
+                    request: false,
+                    text: "hello".to_string(),
+                    election: false,
+                    cpu_load: 0.0,
+                    cpu_message: false,
+                    sender_ip: format!("{}:{}",my_local_ip.clone(),portNum.clone()),
+                    reciver_ip: format!("{}:{}",hostname.clone(),port.clone()),
+                    image_buffer: image_data.clone(),
+                    num_image_bytes: 0,
+                    fail_msg: false,
+                    recoverey: false,
+                    online: true,  
+                    dor_request: true,
+                    dor:false,
+                    directory: dirofser.clone(),
+                    viewimg_request:true
+                };
+                
+                let serialized_object = serde_json::to_string(&msg).unwrap();
+                socket.send_to(&serialized_object.as_bytes(), choice2)
+                        .expect("Error on send");
+                
+                
+                
+                
+                
 
 
             }
@@ -238,7 +313,8 @@ fn main() -> std::io::Result<()> {
                     online: true,  
                     dor_request:false, 
                     dor:false,
-                    directory: dirofser.clone()
+                    directory: dirofser.clone(),
+                    viewimg_request:true
                 };
         
                 let serialized_object = serde_json::to_string(&msg).unwrap();
