@@ -29,6 +29,22 @@ pub struct Message {
     pub recoverey: bool, // Means that server has recovered.
 }
 
+// usage -> displayImage(&["img1.jpeg","img2.png"]);
+fn displayImage (strings: &[&str]) {
+    let command = "feh";
+    let args = strings;
+    let output = Command::new(command)
+        .args(args)
+        .output()
+        .expect("Failed to display image");
+
+    // if output.status.success() {
+    //     ;//println!();
+    // } else {
+    //     ;
+    // }
+}
+
 fn main() -> std::io::Result<()> {
     //let server_addresses: [&str; 3] = ["10.0.2.15:2000","10.0.2.15:2001","10.0.2.15:2002"];
     let server_addresses: [&str; 3] = [
