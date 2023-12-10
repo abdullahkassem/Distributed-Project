@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // print_from_file("image.jpg", &conf).expect("Image printing failed.");
 /// rest of code 3ady 
     //let server_addresses: [&str; 3] = ["10.0.2.15:2000","10.0.2.15:2001","10.0.2.15:2002"];
-    let server_addresses: [&str; 3] = ["10.0.2.7:2000", "10.0.2.7:2001", "10.0.2.7:2002"];
+    let server_addresses: [&str; 3] = ["10.7.57.73:2000", "10.7.57.74:2000", "10.7.57.94:2000"];
     let args: Vec<String> = env::args().collect();
     let portNum = &args[1];
     let my_local_ip = local_ip().unwrap().to_string();

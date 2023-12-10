@@ -202,7 +202,7 @@ fn workerThread(
 ) {
 
     //Configurable Variables:
-    let server_addresses: [&str; 3] = ["10.0.2.7:2000", "10.0.2.7:2001", "10.0.2.7:2002"];
+    let server_addresses: [&str; 3] = ["10.7.57.73:2000", "10.7.57.74:2000", "10.7.57.94:2000"];
     let allowFailures = true;
     let CpuWaitTimeoutPeriod = 5; //Timeout period in seconds
     
