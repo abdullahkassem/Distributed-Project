@@ -1,5 +1,13 @@
 # Distributed-Project
-For both server and client:
+
+**On server Machine:**
+sudo apt install steghide
+
+**On Client Machine:**
+sudo apt install feh
+
+
+**For both server and client:**
 
 Use cargo run "portNumber"
 
